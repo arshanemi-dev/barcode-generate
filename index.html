@@ -189,19 +189,14 @@
             
             <!-- Label Text Block -->
             <div class="label-text-block">
-              <!-- TASK 1: MRP Above Line Removed -->
-              <!-- TASK 2: Only Price Bold (Not Before Text) -->
               <div>Maximum Retail Price - <span id="prev-mrp" class="font-bold">---</span></div>
-              
               <div>Style - <span id="prev-style">---</span></div>
               <div>Dom - <span id="prev-dom">---</span></div>
               <div>Net Qyt - <span id="prev-qty">---</span></div>
               <div>Size - <span id="prev-size">---</span></div>
               <div>Product - <span id="prev-product">---</span></div>
               
-              <!-- Manufacture Line in Bold Form -->
               <div class="font-bold">Manufacture & Packer by - <span id="prev-mfg">---</span></div>
-              
               <div>Marketed by - <span id="prev-marketed">---</span></div>
             </div>
           </div>
@@ -229,28 +224,21 @@
 
     <!-- Left Aligned Text -->
     <div style="text-align: left; font-size: 11px; line-height: 1.45; font-family: Arial, sans-serif; color: #000;">
-      <!-- TASK 1: MRP Above Line Removed -->
-      <!-- TASK 2: Only Price Bold (Not Before Text) -->
       <div>Maximum Retail Price - <span id="pdf-mrp" style="font-weight: bold;">---</span></div>
-      
       <div>Style - <span id="pdf-style">---</span></div>
       <div>Dom - <span id="pdf-dom">28/04/2026</span></div>
       <div>Net Qyt - <span id="pdf-qty">1</span></div>
       <div>Size - <span id="pdf-size">---</span></div>
       <div>Product - <span id="pdf-product">---</span></div>
       
-      <!-- Manufacture Line in Bold Form -->
       <div style="font-weight: bold;">Manufacture & Packer by - <span id="pdf-mfg">---</span></div>
-      
       <div>Marketed by - <span id="pdf-marketed">---</span></div>
     </div>
   </div>
 
   <script>
-    // App State - Starts Completely Empty
     let parsedRows = [];
 
-    // Initialize dropzone & input listeners
     window.addEventListener('DOMContentLoaded', () => {
       setupDragAndDrop();
       updateStats(0, 0);
@@ -258,7 +246,6 @@
 
     document.getElementById('pdf-file-input').addEventListener('change', handleFileSelect);
 
-    // Handle Uploaded File(s)
     async function handleFileSelect(e) {
       const files = Array.from(e.target.files);
       if (!files.length) return;
@@ -278,14 +265,14 @@
       }
 
       if (newExtractedRows.length > 0) {
-        parsedRows = newExtractedRows; // Only keep current uploaded files data
+        parsedRows = newExtractedRows;
         loadDataIntoTable(parsedRows);
       } else {
         alert("Could not extract barcode label data from the selected file.");
       }
     }
 
-    // Extract Text from PDF using PDF.js
+    // Spatial Layout-Aware PDF Parser
     async function parsePDFFile(file) {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -294,72 +281,162 @@
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        const textLines = textContent.items.map(item => item.str.trim()).filter(Boolean);
-        const fullText = textLines.join('\n');
+        
+        // Extract items with vertical (y) and horizontal (x) spatial coordinates
+        const items = textContent.items.map(item => ({
+          str: item.str.trim(),
+          x: item.transform[4],
+          y: item.transform[5]
+        })).filter(item => item.str.length > 0);
 
-        const parsedItem = extractDataFromText(fullText, textLines);
+        // Sort items top-to-bottom (Y descending), left-to-right (X ascending)
+        items.sort((a, b) => b.y - a.y || a.x - b.x);
+
+        const lines = [];
+        let currentY = null;
+        let currentLine = [];
+
+        // Group items falling on the same line (4pt vertical distance threshold)
+        items.forEach(item => {
+          if (currentY === null || Math.abs(item.y - currentY) > 4) {
+            if (currentLine.length > 0) {
+              lines.push(currentLine.join(' '));
+            }
+            currentLine = [item.str];
+            currentY = item.y;
+          } else {
+            currentLine.push(item.str);
+          }
+        });
+        if (currentLine.length > 0) lines.push(currentLine.join(' '));
+
+        const fullText = lines.join('\n');
+        const parsedItem = extractDataFromText(fullText, lines);
         if (parsedItem) extractedItems.push(parsedItem);
       }
 
       return extractedItems;
     }
 
-    // Pattern Recognition & Rules for PDF Label Parsing
+    // Pattern Recognition & Extraction Engine
     function extractDataFromText(fullText, lines) {
-      const getMatch = (regex) => {
-        const m = fullText.match(regex);
-        return m ? m[1].trim() : "";
+      const findMatch = (patterns) => {
+        for (const pattern of patterns) {
+          const match = fullText.match(pattern);
+          if (match && match[1] && match[1].trim()) {
+            return match[1].trim();
+          }
+        }
+        return "";
       };
 
-      // 1. Extract Brand
-      let brand = getMatch(/Brand\s*-\s*([^\n]+)/i) || 
-                  getMatch(/Seller Details\s*\n\s*([^\n]+)/i) || 
-                  getMatch(/If undelivered.*return to\s*\n\s*([^\n]+)/i);
-      if (!brand) brand = "Nirmita Textile";
+      // Helper function to clean extracted brand text from leading tags/punctuation
+      const cleanBrand = (rawBrand) => {
+        if (!rawBrand) return "";
+        return rawBrand
+          .replace(/^(?:brand|seller\s*name|sold\s*by|manufactured\s*by|return\s*to|return\s*address)\s*[:\-]?\s*/i, "")
+          .replace(/^[,\-:\s]+/, "")
+          .split(',')[0]
+          .trim();
+      };
 
-      // 2. Extract SKU / Style Code
-      let sku = getMatch(/Style\s*-\s*([^\n]+)/i) || 
-                getMatch(/([A-Z0-9]+-[A-Z0-9]+(?:\([0-9]+\))?)/i) || 
-                getMatch(/(B[0-9]{5,}-[A-Z0-9]+)/i);
-      if (!sku) {
-        const skuLine = lines.find(l => /1030|B103001|[A-Z0-9]{4,}-[A-Z0-9]+/i.test(l));
-        sku = skuLine ? skuLine.replace(/\(\d+\)/, '') : "1030-BLK";
-      } else {
-        sku = sku.replace(/\(\d+\)/, '');
-      }
-
-      // 3. Extract MRP / Price
-      let mrp = getMatch(/Maximum Retail Price\s*-\s*(\d+)/i) || 
-                getMatch(/Rs\.\s*([\d\.]+)/i) || 
-                getMatch(/AMOUNT TO BE PAID\s*\n\s*Rs\.?([\d\.]+)/i);
-      if (!mrp) mrp = "1299";
-
-      // 4. Extract Size
-      let size = getMatch(/Size\s*-\s*([^\n]+)/i);
-      if (!size) size = "XI";
-
-      // 5. Extract Product Category
-      let product = getMatch(/Product\s*-\s*([^\n]+)/i);
-      if (!product) product = "Blouse";
-
-      // 6. Extract Qty
-      let qty = getMatch(/Net Qy?t\s*-\s*(\d+)/i);
-      if (!qty) qty = "1";
-
-      // 7. Extract DOM Date
-      let dom = getMatch(/Dom\s*-\s*([\d\/]+)/i);
-      if (!dom) dom = "28/04/2026";
-
-      // 8. Extract Marketed Address
-      let address = getMatch(/Marketed by\s*-\s*([^\n]+)/i);
-      if (!address) {
-        const retIdx = lines.findIndex(l => /return to/i.test(l));
-        if (retIdx !== -1 && lines[retIdx + 2]) {
-          address = lines.slice(retIdx + 1, retIdx + 4).join(" ");
-        } else {
-          address = "I-152, Udhna brc, surat, 394210";
+      // 1. EXTRACT BRAND NAME
+      // Priority A: Target line directly below "If undelivered..." return block
+      let brand = "";
+      const undeliveredIndex = lines.findIndex(l => /if\s*undelivered|return\s*to|return\s*address/i.test(l));
+      if (undeliveredIndex !== -1 && undeliveredIndex + 1 < lines.length) {
+        const lineBelow = lines[undeliveredIndex + 1].trim();
+        if (lineBelow.length > 1 && !/phone|mobile|tel|email|pincode|gstin/i.test(lineBelow)) {
+          brand = cleanBrand(lineBelow);
         }
       }
+
+      // Priority B: Fallback explicit regex patterns
+      if (!brand) {
+        const rawBrandMatch = findMatch([
+          /Brand\s*[:\-]\s*([^\n\r]+)/i,
+          /Seller\s*(?:Name|Details)?\s*[:\-]?\s*([^\n\r,]+)/i,
+          /Sold\s*By\s*[:\-]?\s*([^\n\r,]+)/i,
+          /Manufactured\s*By\s*[:\-]?\s*([^\n\r,]+)/i
+        ]);
+        brand = cleanBrand(rawBrandMatch);
+      }
+
+      // Priority C: Heuristic non-address line extraction
+      const addressKeywords = /\b(?:street|road|rd|plot|shop|flat|house|near|opp|gt|brc|surat|gujarat|pincode|\d{6})\b/i;
+      if (!brand || addressKeywords.test(brand)) {
+        const nonAddressLine = lines.find(l => 
+          l.length > 2 && 
+          !addressKeywords.test(l) && 
+          !/return|deliver|order|awb|tracking|pincode|date|mrp/i.test(l)
+        );
+        brand = cleanBrand(nonAddressLine) || "Nirmita Textile";
+      }
+
+      // 2. EXTRACT SKU / STYLE CODE
+      let sku = findMatch([
+        /Style\s*(?:Code|No)?\s*[:\-]\s*([A-Za-z0-9_\-]+)/i,
+        /SKU\s*(?:ID|Code)?\s*[:\-]\s*([A-Za-z0-9_\-]+)/i,
+        /Product\s*Code\s*[:\-]\s*([A-Za-z0-9_\-]+)/i,
+        /\b([A-Z0-9]{3,8}\-[A-Z0-9]{2,8}(?:\-[A-Z0-9]+)?)\b/i,
+        /\b(B[0-9]{5,}[A-Z0-9]*)\b/i
+      ]);
+
+      if (!sku) {
+        const skuCandidate = lines.find(l => 
+          /^(?=.*[0-9])(?=.*[A-Z])[A-Z0-9]{5,20}$/i.test(l.trim()) && 
+          !/AWB|TRACK|ORDER|DELHIVERY|ECOM|EWAY/i.test(l)
+        );
+        sku = skuCandidate ? skuCandidate.trim() : "1030-BLK";
+      }
+
+      sku = sku.replace(/\s*\(\d+\)$/, '').trim();
+
+      // 3. EXTRACT MARKETED BY / ADDRESS
+      let address = findMatch([
+        /Marketed\s*by\s*[:\-]\s*([^\n\r]+)/i,
+        /Return\s*Address\s*[:\-]\s*([^\n\r]+)/i
+      ]);
+
+      if (!address) {
+        const returnIdx = lines.findIndex(l => /return\s*to|if\s*undelivered/i.test(l));
+        if (returnIdx !== -1) {
+          const addressSlice = lines.slice(returnIdx + 1, returnIdx + 5)
+            .filter(l => !/phone|mobile|tel|email/i.test(l));
+          address = addressSlice.join(", ");
+        }
+      }
+
+      if (!address || address.length < 8) {
+        address = "I-152, Udhna brc, surat, 394210";
+      }
+
+      // 4. OTHER ATTRIBUTES
+      let mrp = findMatch([
+        /Maximum\s*Retail\s*Price\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d\.]+)/i,
+        /MRP\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d\.]+)/i,
+        /AMOUNT\s*TO\s*BE\s*PAID\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d\.]+)/i
+      ]) || "1299";
+
+      let size = findMatch([
+        /Size\s*[:\-]\s*([A-Za-z0-9]+)/i,
+        /\b(Size|SZ)\s*[:\-]?\s*(S|M|L|XL|XXL|3XL|4XL|FREE|\d{2})\b/i
+      ]) || "XL";
+
+      let product = findMatch([
+        /Product\s*(?:Name|Type)?\s*[:\-]\s*([^\n\r]+)/i,
+        /Item\s*Description\s*[:\-]\s*([^\n\r]+)/i
+      ]) || "Blouse";
+
+      let qty = findMatch([
+        /Net\s*Q[ty]{1,2}\s*[:\-]\s*(\d+)/i,
+        /QTY\s*[:\-]\s*(\d+)/i
+      ]) || "1";
+
+      let dom = findMatch([
+        /Dom\s*[:\-]\s*([\d\/]+)/i,
+        /Mfg\s*Date\s*[:\-]\s*([\d\/]+)/i
+      ]) || "28/04/2026";
 
       return {
         Brand: brand,
@@ -398,7 +475,7 @@
               MRP: getVal(["MRP", "Maximum Retail Price", "Price"]) || "1299",
               DOM: getVal(["Dom", "DOM", "Date of Mfg"]) || "28/04/2026",
               Qty: getVal(["Net Qyt", "Net Qty", "Qty"]) || "1",
-              Size: getVal(["Size"]) || "XI",
+              Size: getVal(["Size"]) || "XL",
               Product: getVal(["Product"]) || "Blouse",
               MfgBy: getVal(["Manufacture & Packer by", "MfgBy"]) || brand,
               Address: getVal(["Marketed by", "Address"]) || "I-152, Udhna brc, surat, 394210"
@@ -410,7 +487,6 @@
       });
     }
 
-    // Populate UI Data Grid
     function loadDataIntoTable(rows) {
       parsedRows = rows;
       const tbody = document.getElementById('table-body');
@@ -452,7 +528,6 @@
       if (rows.length > 0) updatePreviewCard(0);
     }
 
-    // Live Sticker Preview Update
     function updatePreviewCard(index) {
       const row = parsedRows[index];
       if (!row) return;
@@ -494,7 +569,6 @@
       document.getElementById('prev-barcode').innerHTML = "";
     }
 
-    // Export 1 Single Page Barcode PDF Label
     async function downloadSinglePDF(index) {
       const row = parsedRows[index];
       if (!row) return;
@@ -516,7 +590,6 @@
       pdf.save(`Label_${row.SKU}.pdf`);
     }
 
-    // Export Single Multi-Page PDF Document (1 Barcode Label per Page)
     async function downloadCombinedPDF() {
       if (parsedRows.length === 0) return;
 
