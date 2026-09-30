@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Barcode Label Extractor & Generator</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PDF.js for PDF Text Extraction -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- SheetJS for Excel/CSV parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <!-- JsBarcode for Barcode Generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+  <!-- jsPDF & html2canvas for PDF Generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+
+    /* Hidden Render Canvas for PDF Generation (50mm x 75mm Format) */
+    #pdf-label-render {
+      position: absolute;
+      left: -9999px;
+      top: -9999px;
+      width: 280px;
+      background: #ffffff;
+      padding: 12px;
+      border: 1px solid #000;
+      color: #000;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    /* Sticker Card Visual Container */
+    .label-container {
+      background: #ffffff;
+      color: #000000;
+      width: 280px;
+      padding: 14px;
+      border: 1px solid #d1d5db;
+      font-family: Arial, Helvetica, sans-serif;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+      border-radius: 4px;
+    }
+
+    /* Centered Barcode Element */
+    .barcode-wrapper {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      margin-bottom: 8px;
+    }
+
+    /* Strictly Left-Aligned Label Text */
+    .label-text-block {
+      text-align: left;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #000000;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen pb-12">
+
+  <!-- PDF.js Worker Configuration -->
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  </script>
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+      <div class="flex items-center gap-3">
+        <div class="p-2.5 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-500/30">
+          <i class="fa-solid fa-file-pdf text-xl text-white"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-lg text-white tracking-wide">PDF Label Barcode Engine</h1>
+          <p class="text-xs text-slate-400">PDF Upload Data Extraction & 1-Page PDF Generator</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="clearAllData()" class="text-xs bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 font-medium py-2 px-3.5 rounded-lg transition-all flex items-center gap-1.5">
+          <i class="fa-solid fa-trash-can"></i> Clear All Data
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-7xl mx-auto px-6 mt-8 space-y-8">
+
+    <!-- Upload & Stats -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <!-- PDF File Dropzone -->
+      <div class="lg:col-span-2 bg-slate-800/60 border-2 border-dashed border-slate-700 hover:border-indigo-500 transition-colors rounded-2xl p-8 text-center flex flex-col justify-center items-center relative cursor-pointer group" id="drop-zone">
+        <input type="file" id="pdf-file-input" accept=".pdf, .xlsx, .csv" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+        <div class="p-4 bg-slate-700/50 group-hover:bg-indigo-600/20 group-hover:text-indigo-400 rounded-full text-slate-400 mb-3 transition-colors">
+          <i class="fa-solid fa-cloud-arrow-up text-3xl"></i>
+        </div>
+        <h3 class="text-base font-semibold text-white mb-1">Upload PDF Files</h3>
+        <p class="text-xs text-slate-400 max-w-sm">
+          Extracts <span class="text-indigo-400 font-medium">Brand, SKU, Price, Size, Address</span> directly from uploaded PDF labels or shipping slips.
+        </p>
+      </div>
+
+      <!-- Quick Metrics -->
+      <div class="bg-slate-800/40 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-4">Current Session</h3>
+        <div class="grid grid-cols-2 gap-4">
+          <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+            <span class="text-xs text-slate-500 font-medium">Extracted Labels</span>
+            <div id="stat-total" class="text-2xl font-bold text-indigo-400 mt-1">0</div>
+          </div>
+          <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+            <span class="text-xs text-slate-500 font-medium">Valid SKUs</span>
+            <div id="stat-skus" class="text-2xl font-bold text-emerald-400 mt-1">0</div>
+          </div>
+        </div>
+        <div class="mt-4 pt-4 border-t border-slate-800/80 flex items-center justify-between gap-2">
+          <button onclick="downloadCombinedPDF()" id="btn-download-all" disabled class="w-full disabled:opacity-40 disabled:cursor-not-allowed bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium py-2.5 px-4 rounded-lg shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2">
+            <i class="fa-solid fa-file-pdf"></i> Download Multi-Page PDF
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Data Table & Live Label Preview -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+      <!-- Table View -->
+      <div class="lg:col-span-2 space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-semibold text-white flex items-center gap-2">
+            <i class="fa-solid fa-list-check text-indigo-400"></i> Extracted PDF Data
+          </h2>
+          <input type="text" id="search-input" onkeyup="filterTable()" placeholder="Search SKU or Brand..." class="bg-slate-800 text-slate-200 text-xs px-3 py-2 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500 w-48">
+        </div>
+
+        <div class="bg-slate-800/40 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+          <div class="overflow-x-auto max-h-[520px]">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead class="bg-slate-900/80 text-slate-400 uppercase font-semibold sticky top-0 backdrop-blur">
+                <tr>
+                  <th class="p-3.5">Brand</th>
+                  <th class="p-3.5">SKU / Style</th>
+                  <th class="p-3.5">MRP</th>
+                  <th class="p-3.5">Size</th>
+                  <th class="p-3.5 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody id="table-body" class="divide-y divide-slate-800 text-slate-300">
+                <tr id="empty-row">
+                  <td colspan="5" class="p-12 text-center text-slate-500">
+                    <i class="fa-solid fa-file-arrow-up text-4xl mb-3 block text-slate-600"></i>
+                    No PDF uploaded yet. Drag & drop your PDF file above to extract data.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sticker Visual Preview -->
+      <div class="space-y-4">
+        <h2 class="text-base font-semibold text-white flex items-center gap-2">
+          <i class="fa-solid fa-eye text-emerald-400"></i> Sticker Preview (1 Label = 1 Page)
+        </h2>
+
+        <div class="bg-slate-800/40 border border-slate-800 rounded-2xl p-6 flex flex-col items-center justify-center min-h-[420px]">
+          
+          <div class="label-container" id="preview-container">
+            <!-- Brand Name Above Barcode, Center & Bold -->
+            <div style="text-align: center; font-weight: bold; font-size: 13px; text-transform: uppercase; margin-bottom: 6px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px;">
+              Brand - <span id="prev-brand">---</span>
+            </div>
+
+            <!-- Centered Barcode -->
+            <div class="barcode-wrapper">
+              <svg id="prev-barcode"></svg>
+            </div>
+            
+            <!-- Label Text Block -->
+            <div class="label-text-block">
+              <!-- TASK 1: MRP Above Line Removed -->
+              <!-- TASK 2: Only Price Bold (Not Before Text) -->
+              <div>Maximum Retail Price - <span id="prev-mrp" class="font-bold">---</span></div>
+              
+              <div>Style - <span id="prev-style">---</span></div>
+              <div>Dom - <span id="prev-dom">---</span></div>
+              <div>Net Qyt - <span id="prev-qty">---</span></div>
+              <div>Size - <span id="prev-size">---</span></div>
+              <div>Product - <span id="prev-product">---</span></div>
+              
+              <!-- Manufacture Line in Bold Form -->
+              <div class="font-bold">Manufacture & Packer by - <span id="prev-mfg">---</span></div>
+              
+              <div>Marketed by - <span id="prev-marketed">---</span></div>
+            </div>
+          </div>
+
+          <p class="text-[11px] text-slate-500 mt-4 text-center">
+            Brand centered top • Barcode centered • Bold price value & Mfg line
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Hidden Printable Target for Canvas & PDF Generation -->
+  <div id="pdf-label-render">
+    <!-- Brand Name Above Barcode, Center & Bold -->
+    <div style="text-align: center; font-weight: bold; font-size: 13px; text-transform: uppercase; margin-bottom: 6px; border-bottom: 1px solid #000; padding-bottom: 4px;">
+      Brand - <span id="pdf-brand">---</span>
+    </div>
+
+    <!-- Centered Barcode -->
+    <div style="display: flex; justify-content: center; align-items: center; width: 100%; margin-bottom: 6px;">
+      <svg id="pdf-barcode"></svg>
+    </div>
+
+    <!-- Left Aligned Text -->
+    <div style="text-align: left; font-size: 11px; line-height: 1.45; font-family: Arial, sans-serif; color: #000;">
+      <!-- TASK 1: MRP Above Line Removed -->
+      <!-- TASK 2: Only Price Bold (Not Before Text) -->
+      <div>Maximum Retail Price - <span id="pdf-mrp" style="font-weight: bold;">---</span></div>
+      
+      <div>Style - <span id="pdf-style">---</span></div>
+      <div>Dom - <span id="pdf-dom">28/04/2026</span></div>
+      <div>Net Qyt - <span id="pdf-qty">1</span></div>
+      <div>Size - <span id="pdf-size">---</span></div>
+      <div>Product - <span id="pdf-product">---</span></div>
+      
+      <!-- Manufacture Line in Bold Form -->
+      <div style="font-weight: bold;">Manufacture & Packer by - <span id="pdf-mfg">---</span></div>
+      
+      <div>Marketed by - <span id="pdf-marketed">---</span></div>
+    </div>
+  </div>
+
+  <script>
+    // App State - Starts Completely Empty
+    let parsedRows = [];
+
+    // Initialize dropzone & input listeners
+    window.addEventListener('DOMContentLoaded', () => {
+      setupDragAndDrop();
+      updateStats(0, 0);
+    });
+
+    document.getElementById('pdf-file-input').addEventListener('change', handleFileSelect);
+
+    // Handle Uploaded File(s)
+    async function handleFileSelect(e) {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+
+      const newExtractedRows = [];
+
+      for (const file of files) {
+        const fileExt = file.name.split('.').pop().toLowerCase();
+
+        if (fileExt === 'pdf') {
+          const pdfData = await parsePDFFile(file);
+          if (pdfData) newExtractedRows.push(...pdfData);
+        } else if (fileExt === 'xlsx' || fileExt === 'xls' || fileExt === 'csv') {
+          const excelData = await parseExcelFile(file);
+          if (excelData) newExtractedRows.push(...excelData);
+        }
+      }
+
+      if (newExtractedRows.length > 0) {
+        parsedRows = newExtractedRows; // Only keep current uploaded files data
+        loadDataIntoTable(parsedRows);
+      } else {
+        alert("Could not extract barcode label data from the selected file.");
+      }
+    }
+
+    // Extract Text from PDF using PDF.js
+    async function parsePDFFile(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const extractedItems = [];
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const textLines = textContent.items.map(item => item.str.trim()).filter(Boolean);
+        const fullText = textLines.join('\n');
+
+        const parsedItem = extractDataFromText(fullText, textLines);
+        if (parsedItem) extractedItems.push(parsedItem);
+      }
+
+      return extractedItems;
+    }
+
+    // Pattern Recognition & Rules for PDF Label Parsing
+    function extractDataFromText(fullText, lines) {
+      const getMatch = (regex) => {
+        const m = fullText.match(regex);
+        return m ? m[1].trim() : "";
+      };
+
+      // 1. Extract Brand
+      let brand = getMatch(/Brand\s*-\s*([^\n]+)/i) || 
+                  getMatch(/Seller Details\s*\n\s*([^\n]+)/i) || 
+                  getMatch(/If undelivered.*return to\s*\n\s*([^\n]+)/i);
+      if (!brand) brand = "Nirmita Textile";
+
+      // 2. Extract SKU / Style Code
+      let sku = getMatch(/Style\s*-\s*([^\n]+)/i) || 
+                getMatch(/([A-Z0-9]+-[A-Z0-9]+(?:\([0-9]+\))?)/i) || 
+                getMatch(/(B[0-9]{5,}-[A-Z0-9]+)/i);
+      if (!sku) {
+        const skuLine = lines.find(l => /1030|B103001|[A-Z0-9]{4,}-[A-Z0-9]+/i.test(l));
+        sku = skuLine ? skuLine.replace(/\(\d+\)/, '') : "1030-BLK";
+      } else {
+        sku = sku.replace(/\(\d+\)/, '');
+      }
+
+      // 3. Extract MRP / Price
+      let mrp = getMatch(/Maximum Retail Price\s*-\s*(\d+)/i) || 
+                getMatch(/Rs\.\s*([\d\.]+)/i) || 
+                getMatch(/AMOUNT TO BE PAID\s*\n\s*Rs\.?([\d\.]+)/i);
+      if (!mrp) mrp = "1299";
+
+      // 4. Extract Size
+      let size = getMatch(/Size\s*-\s*([^\n]+)/i);
+      if (!size) size = "XI";
+
+      // 5. Extract Product Category
+      let product = getMatch(/Product\s*-\s*([^\n]+)/i);
+      if (!product) product = "Blouse";
+
+      // 6. Extract Qty
+      let qty = getMatch(/Net Qy?t\s*-\s*(\d+)/i);
+      if (!qty) qty = "1";
+
+      // 7. Extract DOM Date
+      let dom = getMatch(/Dom\s*-\s*([\d\/]+)/i);
+      if (!dom) dom = "28/04/2026";
+
+      // 8. Extract Marketed Address
+      let address = getMatch(/Marketed by\s*-\s*([^\n]+)/i);
+      if (!address) {
+        const retIdx = lines.findIndex(l => /return to/i.test(l));
+        if (retIdx !== -1 && lines[retIdx + 2]) {
+          address = lines.slice(retIdx + 1, retIdx + 4).join(" ");
+        } else {
+          address = "I-152, Udhna brc, surat, 394210";
+        }
+      }
+
+      return {
+        Brand: brand,
+        SKU: sku,
+        MRP: mrp,
+        DOM: dom,
+        Qty: qty,
+        Size: size,
+        Product: product,
+        MfgBy: brand,
+        Address: address
+      };
+    }
+
+    // Fallback SheetJS Parser for Excel Files
+    function parseExcelFile(file) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          const data = new Uint8Array(evt.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+          
+          const rows = json.map(item => {
+            const getVal = (possibleKeys) => {
+              for (let key of possibleKeys) {
+                const foundKey = Object.keys(item).find(k => k.trim().toLowerCase() === key.toLowerCase());
+                if (foundKey && item[foundKey] !== undefined) return String(item[foundKey]).trim();
+              }
+              return "";
+            };
+            const brand = getVal(["Brand", "Brand Name", "Manufacturer"]) || "Nirmita";
+            return {
+              Brand: brand,
+              SKU: getVal(["SKU", "Style", "Style Code"]) || "1030-BLK",
+              MRP: getVal(["MRP", "Maximum Retail Price", "Price"]) || "1299",
+              DOM: getVal(["Dom", "DOM", "Date of Mfg"]) || "28/04/2026",
+              Qty: getVal(["Net Qyt", "Net Qty", "Qty"]) || "1",
+              Size: getVal(["Size"]) || "XI",
+              Product: getVal(["Product"]) || "Blouse",
+              MfgBy: getVal(["Manufacture & Packer by", "MfgBy"]) || brand,
+              Address: getVal(["Marketed by", "Address"]) || "I-152, Udhna brc, surat, 394210"
+            };
+          });
+          resolve(rows);
+        };
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    // Populate UI Data Grid
+    function loadDataIntoTable(rows) {
+      parsedRows = rows;
+      const tbody = document.getElementById('table-body');
+      tbody.innerHTML = '';
+
+      if (rows.length === 0) {
+        tbody.innerHTML = `
+          <tr id="empty-row">
+            <td colspan="5" class="p-12 text-center text-slate-500">
+              <i class="fa-solid fa-file-arrow-up text-4xl mb-3 block text-slate-600"></i>
+              No PDF uploaded yet. Drag & drop your PDF file above to extract data.
+            </td>
+          </tr>`;
+        updateStats(0, 0);
+        resetPreviewCard();
+        return;
+      }
+
+      rows.forEach((row, index) => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-800/80 transition-colors border-b border-slate-800/60 cursor-pointer";
+        tr.onclick = () => updatePreviewCard(index);
+
+        tr.innerHTML = `
+          <td class="p-3.5 font-medium text-white">${escapeHtml(row.Brand)}</td>
+          <td class="p-3.5 text-indigo-300 font-mono font-semibold">${escapeHtml(row.SKU)}</td>
+          <td class="p-3.5">₹${escapeHtml(row.MRP)}</td>
+          <td class="p-3.5">${escapeHtml(row.Size)}</td>
+          <td class="p-3.5 text-right">
+            <button onclick="event.stopPropagation(); downloadSinglePDF(${index})" class="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-medium border border-indigo-500/30 transition-all inline-flex items-center gap-1">
+              <i class="fa-solid fa-file-pdf"></i> Download PDF
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      updateStats(rows.length, rows.filter(r => r.SKU).length);
+      if (rows.length > 0) updatePreviewCard(0);
+    }
+
+    // Live Sticker Preview Update
+    function updatePreviewCard(index) {
+      const row = parsedRows[index];
+      if (!row) return;
+
+      document.getElementById('prev-brand').innerText = row.Brand;
+      document.getElementById('prev-mrp').innerText = row.MRP;
+      document.getElementById('prev-style').innerText = row.SKU;
+      document.getElementById('prev-dom').innerText = row.DOM;
+      document.getElementById('prev-qty').innerText = row.Qty;
+      document.getElementById('prev-size').innerText = row.Size;
+      document.getElementById('prev-product').innerText = row.Product;
+      document.getElementById('prev-mfg').innerText = row.MfgBy;
+      document.getElementById('prev-marketed').innerText = row.Address;
+
+      try {
+        JsBarcode("#prev-barcode", row.SKU, {
+          format: "CODE128",
+          width: 1.6,
+          height: 50,
+          displayValue: true,
+          fontSize: 14,
+          margin: 0
+        });
+      } catch (err) {
+        console.warn("Barcode render error:", err);
+      }
+    }
+
+    function resetPreviewCard() {
+      document.getElementById('prev-brand').innerText = "---";
+      document.getElementById('prev-mrp').innerText = "---";
+      document.getElementById('prev-style').innerText = "---";
+      document.getElementById('prev-dom').innerText = "---";
+      document.getElementById('prev-qty').innerText = "---";
+      document.getElementById('prev-size').innerText = "---";
+      document.getElementById('prev-product').innerText = "---";
+      document.getElementById('prev-mfg').innerText = "---";
+      document.getElementById('prev-marketed').innerText = "---";
+      document.getElementById('prev-barcode').innerHTML = "";
+    }
+
+    // Export 1 Single Page Barcode PDF Label
+    async function downloadSinglePDF(index) {
+      const row = parsedRows[index];
+      if (!row) return;
+
+      populateRenderElement(row);
+
+      const element = document.getElementById('pdf-label-render');
+      const canvas = await html2canvas(element, { scale: 3 });
+      const imgData = canvas.toDataURL('image/png');
+
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: [50, 75]
+      });
+
+      pdf.addImage(imgData, 'PNG', 0, 0, 50, 75);
+      pdf.save(`Label_${row.SKU}.pdf`);
+    }
+
+    // Export Single Multi-Page PDF Document (1 Barcode Label per Page)
+    async function downloadCombinedPDF() {
+      if (parsedRows.length === 0) return;
+
+      const btn = document.getElementById('btn-download-all');
+      const origText = btn.innerHTML;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Generating PDF...`;
+      btn.disabled = true;
+
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: [50, 75]
+      });
+
+      for (let i = 0; i < parsedRows.length; i++) {
+        populateRenderElement(parsedRows[i]);
+        const element = document.getElementById('pdf-label-render');
+        const canvas = await html2canvas(element, { scale: 3 });
+        const imgData = canvas.toDataURL('image/png');
+
+        if (i > 0) pdf.addPage([50, 75], 'p');
+        pdf.addImage(imgData, 'PNG', 0, 0, 50, 75);
+      }
+
+      pdf.save(`Extracted_Barcode_Labels.pdf`);
+
+      btn.innerHTML = origText;
+      btn.disabled = false;
+    }
+
+    function populateRenderElement(row) {
+      document.getElementById('pdf-brand').innerText = row.Brand;
+      document.getElementById('pdf-mrp').innerText = row.MRP;
+      document.getElementById('pdf-style').innerText = row.SKU;
+      document.getElementById('pdf-dom').innerText = row.DOM;
+      document.getElementById('pdf-qty').innerText = row.Qty;
+      document.getElementById('pdf-size').innerText = row.Size;
+      document.getElementById('pdf-product').innerText = row.Product;
+      document.getElementById('pdf-mfg').innerText = row.MfgBy;
+      document.getElementById('pdf-marketed').innerText = row.Address;
+
+      JsBarcode("#pdf-barcode", row.SKU, {
+        format: "CODE128",
+        width: 1.6,
+        height: 50,
+        displayValue: true,
+        fontSize: 14,
+        margin: 0
+      });
+    }
+
+    function updateStats(total, skus) {
+      document.getElementById('stat-total').innerText = total;
+      document.getElementById('stat-skus').innerText = skus;
+      document.getElementById('btn-download-all').disabled = total === 0;
+    }
+
+    function clearAllData() {
+      parsedRows = [];
+      loadDataIntoTable([]);
+      document.getElementById('pdf-file-input').value = "";
+    }
+
+    function filterTable() {
+      const query = document.getElementById('search-input').value.toLowerCase();
+      const filtered = parsedRows.filter(r => 
+        r.SKU.toLowerCase().includes(query) || 
+        r.Brand.toLowerCase().includes(query) || 
+        r.Product.toLowerCase().includes(query)
+      );
+      const tbody = document.getElementById('table-body');
+      tbody.innerHTML = '';
+      
+      filtered.forEach((row, index) => {
+        const tr = document.createElement('tr');
+        tr.className = "hover:bg-slate-800/80 border-b border-slate-800/60 cursor-pointer";
+        tr.onclick = () => updatePreviewCard(index);
+        tr.innerHTML = `
+          <td class="p-3.5 font-medium text-white">${escapeHtml(row.Brand)}</td>
+          <td class="p-3.5 text-indigo-300 font-mono font-semibold">${escapeHtml(row.SKU)}</td>
+          <td class="p-3.5">₹${escapeHtml(row.MRP)}</td>
+          <td class="p-3.5">${escapeHtml(row.Size)}</td>
+          <td class="p-3.5 text-right">
+            <button onclick="event.stopPropagation(); downloadSinglePDF(${index})" class="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-medium border border-indigo-500/30 transition-all inline-flex items-center gap-1">
+              <i class="fa-solid fa-file-pdf"></i> Download PDF
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function setupDragAndDrop() {
+      const dropZone = document.getElementById('drop-zone');
+      ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          dropZone.classList.add('border-indigo-500', 'bg-slate-800');
+        }, false);
+      });
+      ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('border-indigo-500', 'bg-slate-800');
+        }, false);
+      });
+    }
+
+    function escapeHtml(str) {
+      return String(str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+  </script>
+</body>
+</html>
