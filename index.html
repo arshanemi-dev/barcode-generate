@@ -65,6 +65,17 @@
       line-height: 1.45;
       color: #000000;
     }
+
+    /* Sortable column header (both tables) */
+    .sort-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      text-transform: uppercase;
+      transition: color 0.15s;
+    }
+    .sort-btn:hover { color: #ffffff; }
   </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen pb-12">
@@ -117,7 +128,7 @@
         <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-4">Current Session</h3>
         <div class="grid grid-cols-2 gap-4">
           <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
-            <span class="text-xs text-slate-500 font-medium">Extracted Labels</span>
+            <span class="text-xs text-slate-500 font-medium">Labels to Print</span>
             <div id="stat-total" class="text-2xl font-bold text-indigo-400 mt-1">0</div>
           </div>
           <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
@@ -145,7 +156,7 @@
 
       <!-- Table View -->
       <div class="lg:col-span-2 space-y-4">
-        <div class="flex items-center justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <h2 class="text-base font-semibold text-white flex items-center gap-2">
             <i class="fa-solid fa-list-check text-indigo-400"></i> Extracted PDF Data
           </h2>
@@ -157,12 +168,12 @@
             <table class="w-full text-left border-collapse text-xs">
               <thead class="bg-slate-900/80 text-slate-400 uppercase font-semibold sticky top-0 backdrop-blur">
                 <tr>
-                  <th class="p-3.5">Pg</th>
-                  <th class="p-3.5">Brand</th>
-                  <th class="p-3.5">SKU / Style</th>
-                  <th class="p-3.5">Qty</th>
-                  <th class="p-3.5">MRP</th>
-                  <th class="p-3.5">Size</th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="labels" data-sort-key="Page">Pg <i></i></button></th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="labels" data-sort-key="Brand">Brand <i></i></button></th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="labels" data-sort-key="SKU">SKU / Style <i></i></button></th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="labels" data-sort-key="Qty">Qty <i></i></button></th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="labels" data-sort-key="MRP">MRP <i></i></button></th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="labels" data-sort-key="Size">Size <i></i></button></th>
                   <th class="p-3.5 text-right">Action</th>
                 </tr>
               </thead>
@@ -177,6 +188,36 @@
             </table>
           </div>
         </div>
+
+        <!-- Pick List: one line per unique Brand + SKU with total quantity -->
+        <div class="flex flex-wrap items-center justify-between gap-3 pt-4">
+          <h2 class="text-base font-semibold text-white flex items-center gap-2">
+            <i class="fa-solid fa-clipboard-list text-emerald-400"></i> Pick List
+            <span id="pick-summary" class="text-xs font-normal text-slate-500"></span>
+          </h2>
+          <button onclick="downloadPickList()" id="btn-pick-list" disabled class="disabled:opacity-40 disabled:cursor-not-allowed bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 text-xs font-medium py-2 px-3 rounded-lg transition-all flex items-center gap-1.5">
+            <i class="fa-solid fa-file-pdf"></i> Download Pick List
+          </button>
+        </div>
+
+        <div class="bg-slate-800/40 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+          <div class="overflow-x-auto max-h-[520px]">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead class="bg-slate-900/80 text-slate-400 uppercase font-semibold sticky top-0 backdrop-blur">
+                <tr>
+                  <th class="p-3.5">#</th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="pick" data-sort-key="Brand">Brand <i></i></button></th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="pick" data-sort-key="SKU">SKU / Style <i></i></button></th>
+                  <th class="p-3.5"><button class="sort-btn" data-sort-table="pick" data-sort-key="Pages">Pages <i></i></button></th>
+                  <th class="p-3.5 text-right"><button class="sort-btn" data-sort-table="pick" data-sort-key="Qty">Total Qty <i></i></button></th>
+                </tr>
+              </thead>
+              <tbody id="pick-body" class="divide-y divide-slate-800 text-slate-300"></tbody>
+              <tfoot id="pick-foot"></tfoot>
+            </table>
+          </div>
+        </div>
+        <p id="pick-legend" class="text-[11px] text-slate-500"></p>
       </div>
 
       <!-- Sticker Visual Preview -->
@@ -212,7 +253,9 @@
             </div>
           </div>
 
-          <p class="text-[11px] text-slate-500 mt-4 text-center">
+          <p id="prev-copies" class="text-xs font-medium text-indigo-300 mt-4 text-center"></p>
+
+          <p class="text-[11px] text-slate-500 mt-2 text-center">
             Brand centered top • Barcode centered • Bold price value & Mfg line
           </p>
 
@@ -262,6 +305,11 @@
     window.addEventListener('DOMContentLoaded', () => {
       setupDragAndDrop();
       updateStats([]);
+      renderPickListTable();
+      document.querySelectorAll('[data-sort-key]').forEach(btn =>
+        btn.addEventListener('click', () => setSort(btn.dataset.sortTable, btn.dataset.sortKey))
+      );
+      updateSortIndicators();
     });
 
     document.getElementById('pdf-file-input').addEventListener('change', handleFileSelect);
@@ -463,13 +511,15 @@
         tag: l === brandLine ? 'brand' : skuLines.includes(l) ? 'sku' : ''
       }));
 
-      // STEP 5 happens at render time: each row's SKU becomes its barcode
+      // STEP 5 happens at render time: each row's SKU becomes its barcode.
+      // Qty = copies to print (one sticker per unit), so each sticker's Net Qty is 1.
       return [...skuCounts].map(([sku, qty]) => ({
         Brand: brand,
         SKU: sku,
         MRP: mrp,
         DOM: "28/04/2026",
         Qty: String(qty),
+        NetQty: "1",
         Size: size,
         Product: product,
         MfgBy: brand,
@@ -501,7 +551,8 @@
               SKU: getVal(["SKU", "Style", "Style Code"]) || "1030-BLK",
               MRP: getVal(["MRP", "Maximum Retail Price", "Price"]) || "1299",
               DOM: getVal(["Dom", "DOM", "Date of Mfg"]) || "28/04/2026",
-              Qty: getVal(["Net Qyt", "Net Qty", "Qty"]) || "1",
+              Qty: getVal(["Qty", "Copies"]) || "1",
+              NetQty: getVal(["Net Qyt", "Net Qty"]) || "1",
               Size: getVal(["Size"]) || "XL",
               Product: getVal(["Product"]) || "Blouse",
               MfgBy: getVal(["Manufacture & Packer by", "MfgBy"]) || brand,
@@ -555,13 +606,70 @@
           </tr>`;
         updateStats([]);
         resetPreviewCard();
+        renderPickListTable();
         return;
       }
 
+      sortRows(rows, sortStates.labels);
       rows.forEach((row, index) => tbody.appendChild(renderTableRow(row, index)));
 
       updateStats(rows);
+      renderPickListTable();
       updatePreviewCard(0);
+    }
+
+    // -------------------------------------------------------------------
+    // Table sorting (labels table + pick list table) — default Brand, then SKU.
+    // For labels, parsedRows itself is reordered so the multi-page label PDF prints
+    // in the same order as the table.
+    // -------------------------------------------------------------------
+    const sortStates = {
+      labels: { key: 'Brand', dir: 1 },
+      pick: { key: 'Brand', dir: 1 }
+    };
+    const NUMERIC_SORT_KEYS = ['Page', 'Qty', 'MRP'];
+
+    function compareBy(key, a, b) {
+      if (NUMERIC_SORT_KEYS.includes(key)) {
+        const num = (v) => parseFloat(String(v || '').replace(/[^\d.]/g, '')) || 0;
+        return num(a[key]) - num(b[key]);
+      }
+      return String(a[key] || '').localeCompare(String(b[key] || ''), undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    function sortRows(rows, { key, dir }) {
+      const tieBreakers = ['Brand', 'SKU', 'File', 'Page'].filter(k => k !== key);
+      return rows.sort((a, b) =>
+        dir * compareBy(key, a, b) || tieBreakers.reduce((result, k) => result || compareBy(k, a, b), 0)
+      );
+    }
+
+    // Clicking the active column flips direction; a new column starts ascending
+    function setSort(table, key) {
+      const current = sortStates[table];
+      sortStates[table] = { key, dir: current.key === key ? -current.dir : 1 };
+      updateSortIndicators();
+
+      if (table === 'pick') {
+        renderPickListTable();
+        return;
+      }
+      if (!parsedRows.length) return;
+
+      const selectedRow = parsedRows[selectedIndex];
+      sortRows(parsedRows, sortStates.labels);
+      selectedIndex = parsedRows.indexOf(selectedRow);
+      filterTable();
+    }
+
+    function updateSortIndicators() {
+      document.querySelectorAll('[data-sort-key]').forEach(btn => {
+        const state = sortStates[btn.dataset.sortTable];
+        const active = btn.dataset.sortKey === state.key;
+        btn.classList.toggle('text-indigo-300', active);
+        btn.querySelector('i').className = !active ? 'fa-solid fa-sort opacity-40'
+          : state.dir === 1 ? 'fa-solid fa-sort-up' : 'fa-solid fa-sort-down';
+      });
     }
 
     // Global MRP overrides every row, and rows from later uploads too
@@ -591,12 +699,15 @@
       document.getElementById('prev-mrp').innerText = row.MRP;
       document.getElementById('prev-style').innerText = row.SKU;
       document.getElementById('prev-dom').innerText = row.DOM;
-      document.getElementById('prev-qty').innerText = row.Qty;
+      document.getElementById('prev-qty').innerText = row.NetQty;
       document.getElementById('prev-size').innerText = row.Size;
       document.getElementById('prev-product').innerText = row.Product;
       document.getElementById('prev-mfg').innerText = row.MfgBy;
       document.getElementById('prev-marketed').innerText = row.Address;
       renderBarcode("#prev-barcode", row.SKU);
+
+      const copies = copiesOf(row);
+      document.getElementById('prev-copies').innerText = `Prints ${copies} ${copies === 1 ? 'copy' : 'copies'}`;
 
       const tagStyles = { brand: 'text-emerald-400 font-semibold', sku: 'text-indigo-300 font-semibold' };
       document.getElementById('prev-source').innerText = row.Page ? `— ${row.File}, page ${row.Page}` : '';
@@ -619,6 +730,7 @@
       document.getElementById('prev-mfg').innerText = "---";
       document.getElementById('prev-marketed').innerText = "---";
       document.getElementById('prev-barcode').innerHTML = "";
+      document.getElementById('prev-copies').innerText = "";
       document.getElementById('prev-source').innerText = "";
       document.getElementById('prev-pagetext').innerHTML = "";
     }
@@ -652,6 +764,22 @@
       return canvas.toDataURL('image/png');
     }
 
+    // Quantity 2 => 2 copies of the label
+    function copiesOf(row) {
+      return Math.max(1, parseInt(row.Qty, 10) || 1);
+    }
+
+    // One 50x75mm page per copy; the label is captured once and reused.
+    // Returns the running page count so the next label knows to add a page.
+    function addLabelCopies(pdf, imgData, copies, pagesSoFar) {
+      for (let c = 0; c < copies; c++) {
+        if (pagesSoFar > 0) pdf.addPage([50, 75], 'p');
+        pdf.addImage(imgData, 'PNG', 0, 0, 50, 75);
+        pagesSoFar++;
+      }
+      return pagesSoFar;
+    }
+
     async function downloadSinglePDF(index) {
       const row = parsedRows[index];
       if (!row) return;
@@ -665,7 +793,7 @@
         format: [50, 75]
       });
 
-      pdf.addImage(imgData, 'PNG', 0, 0, 50, 75);
+      addLabelCopies(pdf, imgData, copiesOf(row), 0);
       pdf.save(`Label_${row.SKU}.pdf`);
     }
 
@@ -685,10 +813,10 @@
           format: [50, 75]
         });
 
-        for (let i = 0; i < parsedRows.length; i++) {
-          const imgData = await captureLabel(parsedRows[i]);
-          if (i > 0) pdf.addPage([50, 75], 'p');
-          pdf.addImage(imgData, 'PNG', 0, 0, 50, 75);
+        let pages = 0;
+        for (const row of parsedRows) {
+          const imgData = await captureLabel(row);
+          pages = addLabelCopies(pdf, imgData, copiesOf(row), pages);
         }
 
         pdf.save(`Extracted_Barcode_Labels.pdf`);
@@ -703,7 +831,7 @@
       document.getElementById('pdf-mrp').innerText = row.MRP;
       document.getElementById('pdf-style').innerText = row.SKU;
       document.getElementById('pdf-dom').innerText = row.DOM;
-      document.getElementById('pdf-qty').innerText = row.Qty;
+      document.getElementById('pdf-qty').innerText = row.NetQty;
       document.getElementById('pdf-size').innerText = row.Size;
       document.getElementById('pdf-product').innerText = row.Product;
       document.getElementById('pdf-mfg').innerText = row.MfgBy;
@@ -712,9 +840,159 @@
     }
 
     function updateStats(rows) {
-      document.getElementById('stat-total').innerText = rows.length;
+      document.getElementById('stat-total').innerText = rows.reduce((sum, row) => sum + copiesOf(row), 0);
       document.getElementById('stat-skus').innerText = new Set(rows.map(r => r.SKU)).size;
       document.getElementById('btn-download-all').disabled = rows.length === 0;
+    }
+
+    // -------------------------------------------------------------------
+    // Pick list: one line per unique Brand + SKU with its total quantity.
+    // The on-page table and the downloaded PDF both come from buildPickList,
+    // so the PDF always matches the table (including its sort order).
+    // -------------------------------------------------------------------
+    function buildPickList(rows) {
+      // Numbered by file name, so F1/F2 never change when the tables are re-sorted
+      const files = [...new Set(rows.map(r => r.File).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const groups = new Map();
+
+      rows.forEach(row => {
+        const key = `${String(row.Brand || '').trim().toUpperCase()}|${row.SKU}`;
+        const item = groups.get(key) || { Brand: row.Brand, SKU: row.SKU, Qty: 0, refs: [] };
+        item.Qty += copiesOf(row);
+        if (row.Page) {
+          // With several files uploaded, page refs become "F2 p3" (file 2, page 3)
+          const ref = files.length > 1 ? `F${files.indexOf(row.File) + 1} p${row.Page}` : String(row.Page);
+          if (!item.refs.includes(ref)) item.refs.push(ref);
+        }
+        groups.set(key, item);
+      });
+
+      const items = [...groups.values()].map(({ refs, ...item }) => ({ ...item, Pages: refs.join(', ') }));
+      return {
+        items: sortRows(items, sortStates.pick),
+        totalQty: items.reduce((sum, item) => sum + item.Qty, 0),
+        files
+      };
+    }
+
+    function renderPickListTable() {
+      const { items, totalQty, files } = buildPickList(parsedRows);
+      const tbody = document.getElementById('pick-body');
+      const tfoot = document.getElementById('pick-foot');
+
+      document.getElementById('btn-pick-list').disabled = items.length === 0;
+      document.getElementById('pick-summary').innerText = items.length
+        ? `${items.length} ${items.length === 1 ? 'SKU' : 'SKUs'} · ${totalQty} units` : '';
+      document.getElementById('pick-legend').innerText = files.length > 1
+        ? 'Pages: ' + files.map((f, i) => `F${i + 1} = ${f}`).join(' · ') : '';
+
+      if (!items.length) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" class="p-8 text-center text-slate-500">Upload a PDF to build the pick list.</td>
+          </tr>`;
+        tfoot.innerHTML = '';
+        return;
+      }
+
+      tbody.innerHTML = items.map((item, i) => `
+        <tr class="hover:bg-slate-800/80 transition-colors">
+          <td class="p-3.5 text-slate-500">${i + 1}</td>
+          <td class="p-3.5 font-medium text-white">${escapeHtml(item.Brand)}</td>
+          <td class="p-3.5 text-indigo-300 font-mono font-semibold">${escapeHtml(item.SKU)}</td>
+          <td class="p-3.5 text-slate-400">${escapeHtml(item.Pages || '-')}</td>
+          <td class="p-3.5 text-right font-semibold text-white">${item.Qty}</td>
+        </tr>`).join('');
+      tfoot.innerHTML = `
+        <tr class="bg-slate-900/80 border-t border-slate-700">
+          <td colspan="4" class="p-3.5 text-right text-slate-400 uppercase font-semibold">Total Units</td>
+          <td class="p-3.5 text-right font-bold text-emerald-400">${totalQty}</td>
+        </tr>`;
+    }
+
+    function downloadPickList() {
+      const { items, totalQty, files } = buildPickList(parsedRows);
+      if (!items.length) return;
+
+      const sourceText = files.length > 1 ? files.map((f, i) => `F${i + 1} = ${f}`).join(',  ') : files[0];
+
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 14;
+      // Same column order as the on-page pick list table
+      const cols = [
+        { title: '#', x: margin, w: 10 },
+        { title: 'Brand', x: margin + 10, w: 42 },
+        { title: 'SKU', x: margin + 52, w: 62 },
+        { title: 'Pages', x: margin + 114, w: 34 },
+        { title: 'Qty', x: margin + 148, w: 14, right: true },
+        { title: 'Picked', x: margin + 162, w: 20 }
+      ];
+      const [numCol, brandCol, skuCol, pagesCol, qtyCol, pickedCol] = cols;
+
+      const drawHeaderRow = (y) => {
+        pdf.setFillColor(238, 240, 244);
+        pdf.rect(margin, y, pageW - margin * 2, 8, 'F');
+        pdf.setFont('helvetica', 'bold').setFontSize(9).setTextColor(60);
+        cols.forEach(c => pdf.text(c.title, c.right ? c.x + c.w - 2 : c.x + 2, y + 5.3, { align: c.right ? 'right' : 'left' }));
+        return y + 8;
+      };
+
+      // Title block
+      pdf.setFont('helvetica', 'bold').setFontSize(16).setTextColor(20);
+      pdf.text('Pick List', margin, 20);
+      pdf.setFont('helvetica', 'normal').setFontSize(9).setTextColor(90);
+      pdf.text(`Generated: ${new Date().toLocaleString('en-IN')}`, margin, 27);
+      pdf.text(`${items.length} SKUs  |  ${totalQty} units`, pageW - margin, 27, { align: 'right' });
+      let y = 34;
+      if (sourceText) {
+        const sourceLines = pdf.splitTextToSize(`Source: ${sourceText}`, pageW - margin * 2);
+        pdf.text(sourceLines, margin, 32);
+        y = 32 + sourceLines.length * 4;
+      }
+
+      y = drawHeaderRow(y + 2);
+      pdf.setDrawColor(215);
+
+      items.forEach((item, i) => {
+        pdf.setFont('helvetica', 'normal').setFontSize(9);
+        const brandLines = pdf.splitTextToSize(item.Brand, brandCol.w - 4);
+        const skuLines = pdf.splitTextToSize(item.SKU, skuCol.w - 4);
+        const pageLines = pdf.splitTextToSize(item.Pages || '-', pagesCol.w - 4);
+        const rowH = Math.max(skuLines.length, brandLines.length, pageLines.length) * 4 + 4;
+
+        if (y + rowH > pageH - 22) {
+          pdf.addPage();
+          y = drawHeaderRow(margin);
+        }
+
+        pdf.setFont('helvetica', 'normal').setFontSize(9).setTextColor(20);
+        pdf.text(String(i + 1), numCol.x + 2, y + 5.3);
+        pdf.text(brandLines, brandCol.x + 2, y + 5.3);
+        pdf.setFont('helvetica', 'bold').text(skuLines, skuCol.x + 2, y + 5.3);
+        pdf.setFont('helvetica', 'normal').text(pageLines, pagesCol.x + 2, y + 5.3);
+        pdf.setFont('helvetica', 'bold').text(String(item.Qty), qtyCol.x + qtyCol.w - 2, y + 5.3, { align: 'right' });
+        pdf.rect(pickedCol.x + 7, y + 2, 4, 4);
+        pdf.line(margin, y + rowH, pageW - margin, y + rowH);
+        y += rowH;
+      });
+
+      // Total row
+      pdf.setFont('helvetica', 'bold').setFontSize(10).setTextColor(20);
+      pdf.text('Total units', pagesCol.x + 2, y + 6);
+      pdf.text(String(totalQty), qtyCol.x + qtyCol.w - 2, y + 6, { align: 'right' });
+
+      const pageCount = pdf.getNumberOfPages();
+      for (let p = 1; p <= pageCount; p++) {
+        pdf.setPage(p);
+        pdf.setFont('helvetica', 'normal').setFontSize(8).setTextColor(130);
+        pdf.text(`Page ${p} of ${pageCount}`, pageW - margin, pageH - 8, { align: 'right' });
+      }
+
+      pdf.save(`Pick_List_${new Date().toISOString().slice(0, 10)}.pdf`);
     }
 
     function clearAllData() {
