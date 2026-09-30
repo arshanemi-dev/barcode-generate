@@ -121,7 +121,7 @@
             <div id="stat-total" class="text-2xl font-bold text-indigo-400 mt-1">0</div>
           </div>
           <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
-            <span class="text-xs text-slate-500 font-medium">Valid SKUs</span>
+            <span class="text-xs text-slate-500 font-medium">Unique SKUs</span>
             <div id="stat-skus" class="text-2xl font-bold text-emerald-400 mt-1">0</div>
           </div>
         </div>
@@ -150,8 +150,10 @@
             <table class="w-full text-left border-collapse text-xs">
               <thead class="bg-slate-900/80 text-slate-400 uppercase font-semibold sticky top-0 backdrop-blur">
                 <tr>
+                  <th class="p-3.5">Pg</th>
                   <th class="p-3.5">Brand</th>
                   <th class="p-3.5">SKU / Style</th>
+                  <th class="p-3.5">Qty</th>
                   <th class="p-3.5">MRP</th>
                   <th class="p-3.5">Size</th>
                   <th class="p-3.5 text-right">Action</th>
@@ -159,7 +161,7 @@
               </thead>
               <tbody id="table-body" class="divide-y divide-slate-800 text-slate-300">
                 <tr id="empty-row">
-                  <td colspan="5" class="p-12 text-center text-slate-500">
+                  <td colspan="7" class="p-12 text-center text-slate-500">
                     <i class="fa-solid fa-file-arrow-up text-4xl mb-3 block text-slate-600"></i>
                     No PDF uploaded yet. Drag & drop your PDF file above to extract data.
                   </td>
@@ -206,6 +208,14 @@
           <p class="text-[11px] text-slate-500 mt-4 text-center">
             Brand centered top • Barcode centered • Bold price value & Mfg line
           </p>
+
+          <!-- Raw page text, with the lines used for Brand / SKU highlighted -->
+          <details class="w-full mt-4 text-xs">
+            <summary class="cursor-pointer text-slate-400 hover:text-slate-200">
+              Extracted page text <span id="prev-source" class="text-slate-500"></span>
+            </summary>
+            <div id="prev-pagetext" class="mt-2 max-h-64 overflow-auto bg-slate-900/80 border border-slate-800 rounded-lg p-3 font-mono text-[11px] leading-relaxed text-slate-400 whitespace-pre-wrap break-all"></div>
+          </details>
         </div>
       </div>
 
@@ -243,7 +253,7 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       setupDragAndDrop();
-      updateStats(0, 0);
+      updateStats([]);
     });
 
     document.getElementById('pdf-file-input').addEventListener('change', handleFileSelect);
@@ -253,70 +263,140 @@
       if (!files.length) return;
 
       const newExtractedRows = [];
+      const problems = [];
 
       for (const file of files) {
         const fileExt = file.name.split('.').pop().toLowerCase();
 
-        if (fileExt === 'pdf') {
-          const pdfData = await parsePDFFile(file);
-          if (pdfData) newExtractedRows.push(...pdfData);
-        } else if (fileExt === 'xlsx' || fileExt === 'xls' || fileExt === 'csv') {
-          const excelData = await parseExcelFile(file);
-          if (excelData) newExtractedRows.push(...excelData);
+        try {
+          if (fileExt === 'pdf') {
+            const { labels, skippedPages } = await parsePDFFile(file);
+            newExtractedRows.push(...labels);
+            if (skippedPages.length) problems.push(`${file.name}: no SKU found on page ${skippedPages.join(', ')}`);
+          } else if (fileExt === 'xlsx' || fileExt === 'xls' || fileExt === 'csv') {
+            const excelData = await parseExcelFile(file);
+            if (excelData) newExtractedRows.push(...excelData);
+          }
+        } catch (err) {
+          console.error(`Failed to read ${file.name}:`, err);
+          problems.push(`${file.name}: could not be read (${err.message})`);
         }
       }
 
       if (newExtractedRows.length > 0) {
         parsedRows = newExtractedRows;
         loadDataIntoTable(parsedRows);
-      } else {
-        alert("Could not extract barcode label data from the selected file.");
+      }
+
+      if (!newExtractedRows.length || problems.length) {
+        const heading = newExtractedRows.length ? "Some pages were skipped:" : "Could not extract barcode label data from the selected file.";
+        alert([heading, ...problems].join('\n'));
       }
     }
 
-    // Spatial Layout-Aware PDF Parser
+    // One label per unique SKU on each page of the PDF
     async function parsePDFFile(file) {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const extractedItems = [];
+      const labels = [];
+      const skippedPages = [];
 
       for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        
-        const items = textContent.items.map(item => ({
-          str: item.str.trim(),
-          x: item.transform[4],
-          y: item.transform[5]
-        })).filter(item => item.str.length > 0);
+        const lines = await extractPageLines(await pdf.getPage(i));
+        const pageLabels = extractLabelsFromPage(lines).map(row => ({ ...row, File: file.name, Page: i }));
 
-        items.sort((a, b) => b.y - a.y || a.x - b.x);
-
-        const lines = [];
-        let currentY = null;
-        let currentLine = [];
-
-        items.forEach(item => {
-          if (currentY === null || Math.abs(item.y - currentY) > 4) {
-            if (currentLine.length > 0) lines.push(currentLine.join(' '));
-            currentLine = [item.str];
-            currentY = item.y;
-          } else {
-            currentLine.push(item.str);
-          }
-        });
-        if (currentLine.length > 0) lines.push(currentLine.join(' '));
-
-        const fullText = lines.join('\n');
-        const parsedItem = extractDataFromText(fullText, lines);
-        if (parsedItem) extractedItems.push(parsedItem);
+        if (pageLabels.length) labels.push(...pageLabels);
+        else skippedPages.push(i);
       }
 
-      return extractedItems;
+      return { labels, skippedPages };
     }
 
-    // Updated Pattern Recognition Engine
-    function extractDataFromText(fullText, lines) {
+    // -------------------------------------------------------------------
+    // STEP 1: Read every text item on the page and rebuild reading-order lines.
+    // Items on the same baseline form a row; a wide horizontal gap starts a new
+    // segment so side-by-side columns (return address vs Seller Details) stay apart.
+    // -------------------------------------------------------------------
+    async function extractPageLines(page) {
+      const { items } = await page.getTextContent();
+      const pieces = items
+        .filter(item => item.str && item.str.trim())
+        .map(item => ({
+          str: item.str,
+          x: item.transform[4],
+          y: item.transform[5],
+          w: item.width,
+          h: Math.abs(item.transform[3]) || item.height || 10
+        }))
+        .sort((a, b) => b.y - a.y);
+
+      const rows = [];
+      pieces.forEach(piece => {
+        const row = rows[rows.length - 1];
+        if (row && Math.abs(row.y - piece.y) <= Math.max(2, Math.min(row.h, piece.h) * 0.5)) {
+          row.pieces.push(piece);
+        } else {
+          rows.push({ y: piece.y, h: piece.h, pieces: [piece] });
+        }
+      });
+
+      const lines = [];
+      rows.forEach(row => {
+        let segment = null;
+        row.pieces.sort((a, b) => a.x - b.x).forEach(piece => {
+          const gap = segment ? piece.x - segment.x1 : Infinity;
+          if (gap > piece.h * 2) {
+            segment = { text: piece.str, x0: piece.x, x1: piece.x + piece.w, y: row.y };
+            lines.push(segment);
+          } else {
+            // Pieces that touch are one word split by the PDF writer — don't add a space
+            const needsSpace = gap > piece.h * 0.15 && !/\s$/.test(segment.text) && !/^\s/.test(piece.str);
+            segment.text += (needsSpace ? ' ' : '') + piece.str;
+            segment.x1 = Math.max(segment.x1, piece.x + piece.w);
+          }
+        });
+      });
+
+      lines.forEach(line => { line.text = line.text.replace(/\s+/g, ' ').trim(); });
+      return lines;
+    }
+
+    // -------------------------------------------------------------------
+    // STEP 2: Brand = the text directly below "Seller Details", in the same column
+    // -------------------------------------------------------------------
+    function findLineBelow(lines, header) {
+      const sameColumn = lines.filter(l => l.y < header.y - 1 && l.x0 < header.x1 && l.x1 > header.x0);
+      if (sameColumn.length) return sameColumn.reduce((closest, l) => (l.y > closest.y ? l : closest));
+      return lines[lines.indexOf(header) + 1] || null;
+    }
+
+    // -------------------------------------------------------------------
+    // STEP 3 + 4: A line with "( )" holds SKUs written as SKU(qty), e.g.
+    // "B165804-38RNI(1), B171504-38RNI(1)". Split on commas: the number of parts is
+    // the quantity, and repeated SKUs collapse into one label. Parts that aren't
+    // SKU(number) — like the routing code "(201014)-(0310)" — are ignored.
+    // -------------------------------------------------------------------
+    const SKU_PART = /^([^\s()]+)\s*\(\s*\d+\s*\)$/;
+
+    function extractSkuCounts(lines) {
+      const counts = new Map();
+      const skuLines = lines.filter(line => {
+        if (!/\(.*\)/.test(line.text)) return false;
+        let found = false;
+        line.text.split(',').forEach(part => {
+          const match = part.trim().match(SKU_PART);
+          if (match) {
+            counts.set(match[1], (counts.get(match[1]) || 0) + 1);
+            found = true;
+          }
+        });
+        return found;
+      });
+      return { counts, skuLines };
+    }
+
+    function extractLabelsFromPage(lines) {
+      const fullText = lines.map(l => l.text).join('\n');
       const findMatch = (patterns) => {
         for (const pattern of patterns) {
           const match = fullText.match(pattern);
@@ -327,56 +407,23 @@
         return "";
       };
 
-      // -------------------------------------------------------------------
-      // TASK 1: Read Brand Name from line directly below Seller Details
-      // -------------------------------------------------------------------
-      let brand = "";
-      const sellerIdx = lines.findIndex(l => 
-        /seller\s*details|sold\s*by|return\s*to|if\s*undelivered/i.test(l)
-      );
+      const header = lines.find(l => /seller\s*details?/i.test(l.text));
+      const brandLine = header ? findLineBelow(lines, header) : null;
 
-      if (sellerIdx !== -1 && sellerIdx + 1 < lines.length) {
-        brand = lines[sellerIdx + 1]
-          .replace(/^(?:brand|seller\s*name|sold\s*by|manufactured\s*by)\s*[:\-]?\s*/i, "")
-          .replace(/^[,\-:\s]+/, "")
-          .split(',')[0]
-          .trim();
-      }
+      let brand = brandLine ? brandLine.text
+        .replace(/^(?:brand|seller\s*name|sold\s*by|manufactured\s*by)\s*[:\-]?\s*/i, "")
+        .replace(/^[,\-:\s]+/, "")
+        .split(',')[0]
+        .trim() : "";
 
       if (!brand) {
         brand = findMatch([
-          /Brand\s*[:\-]\s*([^\n\r]+)/i,
-          /Seller\s*(?:Name|Details)?\s*[:\-]?\s*([^\n\r,]+)/i
+          /Brand\s*[:\-]\s*([^\n\r]+)/i
         ]) || "Nirmita Textile";
       }
 
-      // -------------------------------------------------------------------
-      // TASK 2: Extract SKU lines containing parentheses '(' and ')'
-      // -------------------------------------------------------------------
-      const skuParenthesesLines = lines.filter(l => l.includes('(') && l.includes(')'));
-
-      let extractedSKUs = [];
-      skuParenthesesLines.forEach(line => {
-        // -----------------------------------------------------------------
-        // TASK 3: Split using comma to calculate quantity and SKU count
-        // -----------------------------------------------------------------
-        const commaParts = line.split(',');
-        
-        commaParts.forEach(part => {
-          const trimmed = part.trim();
-          const match = trimmed.match(/([A-Za-z0-9_\-]+)\s*\(/);
-          if (match && match[1]) {
-            extractedSKUs.push(match[1].trim());
-          } else if (trimmed.length > 0) {
-            const cleanSku = trimmed.replace(/\s*\([\s\S]*?\)/, '').trim();
-            if (cleanSku) extractedSKUs.push(cleanSku);
-          }
-        });
-      });
-
-      const calculatedQty = extractedSKUs.length > 0 ? extractedSKUs.length : 1;
-      const uniqueSKUs = [...new Set(extractedSKUs)];
-      const primarySKU = uniqueSKUs.length > 0 ? uniqueSKUs.join(' / ') : "1030-BLK";
+      const { counts: skuCounts, skuLines } = extractSkuCounts(lines.filter(l => l !== header && l !== brandLine));
+      if (!skuCounts.size) return [];
 
       // -------------------------------------------------------------------
       // Other Fields Extraction
@@ -400,17 +447,25 @@
         /Product\s*(?:Name|Type)?\s*[:\-]\s*([^\n\r]+)/i
       ]) || "Blouse";
 
-      return {
+      // Kept for the "Extracted page text" panel so each pick can be checked
+      const pageLines = lines.map(l => ({
+        text: l.text,
+        tag: l === brandLine ? 'brand' : skuLines.includes(l) ? 'sku' : ''
+      }));
+
+      // STEP 5 happens at render time: each row's SKU becomes its barcode
+      return [...skuCounts].map(([sku, qty]) => ({
         Brand: brand,
-        SKU: primarySKU,
+        SKU: sku,
         MRP: mrp,
         DOM: "28/04/2026",
-        Qty: String(calculatedQty),
+        Qty: String(qty),
         Size: size,
         Product: product,
         MfgBy: brand,
-        Address: address
-      };
+        Address: address,
+        PageLines: pageLines
+      }));
     }
 
     // SheetJS Parser for Excel Files
@@ -418,7 +473,7 @@
       return new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = (evt) => {
-          const data = new Uint8Array(evt.result);
+          const data = new Uint8Array(evt.target.result);
           const workbook = XLSX.read(data, { type: 'array' });
           const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
           
@@ -449,6 +504,27 @@
       });
     }
 
+    function renderTableRow(row, index) {
+      const tr = document.createElement('tr');
+      tr.className = "hover:bg-slate-800/80 transition-colors border-b border-slate-800/60 cursor-pointer";
+      tr.onclick = () => updatePreviewCard(index);
+
+      tr.innerHTML = `
+        <td class="p-3.5 text-slate-500">${escapeHtml(row.Page || '-')}</td>
+        <td class="p-3.5 font-medium text-white">${escapeHtml(row.Brand)}</td>
+        <td class="p-3.5 text-indigo-300 font-mono font-semibold">${escapeHtml(row.SKU)}</td>
+        <td class="p-3.5">${escapeHtml(row.Qty)}</td>
+        <td class="p-3.5">₹${escapeHtml(row.MRP)}</td>
+        <td class="p-3.5">${escapeHtml(row.Size)}</td>
+        <td class="p-3.5 text-right">
+          <button onclick="event.stopPropagation(); downloadSinglePDF(${index})" class="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-medium border border-indigo-500/30 transition-all inline-flex items-center gap-1">
+            <i class="fa-solid fa-file-pdf"></i> Download PDF
+          </button>
+        </td>
+      `;
+      return tr;
+    }
+
     function loadDataIntoTable(rows) {
       parsedRows = rows;
       const tbody = document.getElementById('table-body');
@@ -457,37 +533,20 @@
       if (rows.length === 0) {
         tbody.innerHTML = `
           <tr id="empty-row">
-            <td colspan="5" class="p-12 text-center text-slate-500">
+            <td colspan="7" class="p-12 text-center text-slate-500">
               <i class="fa-solid fa-file-arrow-up text-4xl mb-3 block text-slate-600"></i>
               No PDF uploaded yet. Drag & drop your PDF file above to extract data.
             </td>
           </tr>`;
-        updateStats(0, 0);
+        updateStats([]);
         resetPreviewCard();
         return;
       }
 
-      rows.forEach((row, index) => {
-        const tr = document.createElement('tr');
-        tr.className = "hover:bg-slate-800/80 transition-colors border-b border-slate-800/60 cursor-pointer";
-        tr.onclick = () => updatePreviewCard(index);
+      rows.forEach((row, index) => tbody.appendChild(renderTableRow(row, index)));
 
-        tr.innerHTML = `
-          <td class="p-3.5 font-medium text-white">${escapeHtml(row.Brand)}</td>
-          <td class="p-3.5 text-indigo-300 font-mono font-semibold">${escapeHtml(row.SKU)}</td>
-          <td class="p-3.5">₹${escapeHtml(row.MRP)}</td>
-          <td class="p-3.5">${escapeHtml(row.Size)}</td>
-          <td class="p-3.5 text-right">
-            <button onclick="event.stopPropagation(); downloadSinglePDF(${index})" class="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-medium border border-indigo-500/30 transition-all inline-flex items-center gap-1">
-              <i class="fa-solid fa-file-pdf"></i> Download PDF
-            </button>
-          </td>
-        `;
-        tbody.appendChild(tr);
-      });
-
-      updateStats(rows.length, rows.filter(r => r.SKU).length);
-      if (rows.length > 0) updatePreviewCard(0);
+      updateStats(rows);
+      updatePreviewCard(0);
     }
 
     function updatePreviewCard(index) {
@@ -503,19 +562,15 @@
       document.getElementById('prev-product').innerText = row.Product;
       document.getElementById('prev-mfg').innerText = row.MfgBy;
       document.getElementById('prev-marketed').innerText = row.Address;
+      renderBarcode("#prev-barcode", row.SKU);
 
-      try {
-        JsBarcode("#prev-barcode", row.SKU, {
-          format: "CODE128",
-          width: 1.6,
-          height: 50,
-          displayValue: true,
-          fontSize: 14,
-          margin: 0
-        });
-      } catch (err) {
-        console.warn("Barcode render error:", err);
-      }
+      const tagStyles = { brand: 'text-emerald-400 font-semibold', sku: 'text-indigo-300 font-semibold' };
+      document.getElementById('prev-source').innerText = row.Page ? `— ${row.File}, page ${row.Page}` : '';
+      document.getElementById('prev-pagetext').innerHTML = row.PageLines
+        ? row.PageLines.map(l =>
+            `<div class="${tagStyles[l.tag] || ''}">${l.tag ? `[${l.tag.toUpperCase()}] ` : ''}${escapeHtml(l.text)}</div>`
+          ).join('')
+        : '<div>Not extracted from a PDF.</div>';
     }
 
     function resetPreviewCard() {
@@ -529,17 +584,44 @@
       document.getElementById('prev-mfg').innerText = "---";
       document.getElementById('prev-marketed').innerText = "---";
       document.getElementById('prev-barcode').innerHTML = "";
+      document.getElementById('prev-source').innerText = "";
+      document.getElementById('prev-pagetext').innerHTML = "";
+    }
+
+    // STEP 5: CODE128 barcode from the SKU. On failure the SVG is cleared so the
+    // previous label's barcode is never left behind on this one.
+    function renderBarcode(selector, sku) {
+      try {
+        JsBarcode(selector, sku, {
+          format: "CODE128",
+          width: 1.6,
+          height: 50,
+          displayValue: true,
+          fontSize: 14,
+          margin: 0
+        });
+      } catch (err) {
+        console.warn(`Barcode render error for "${sku}":`, err);
+        document.querySelector(selector).innerHTML = "";
+      }
+    }
+
+    // The render target sits at opacity 0 so it never shows on screen, and
+    // html2canvas copies that opacity — make only its clone visible.
+    async function captureLabel(row) {
+      populateRenderElement(row);
+      const canvas = await html2canvas(document.getElementById('pdf-label-render'), {
+        scale: 3,
+        onclone: (doc) => { doc.getElementById('pdf-label-render').style.opacity = '1'; }
+      });
+      return canvas.toDataURL('image/png');
     }
 
     async function downloadSinglePDF(index) {
       const row = parsedRows[index];
       if (!row) return;
 
-      populateRenderElement(row);
-
-      const element = document.getElementById('pdf-label-render');
-      const canvas = await html2canvas(element, { scale: 3 });
-      const imgData = canvas.toDataURL('image/png');
+      const imgData = await captureLabel(row);
 
       const { jsPDF } = window.jspdf;
       const pdf = new jsPDF({
@@ -560,27 +642,25 @@
       btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Generating PDF...`;
       btn.disabled = true;
 
-      const { jsPDF } = window.jspdf;
-      const pdf = new jsPDF({
-        orientation: 'p',
-        unit: 'mm',
-        format: [50, 75]
-      });
+      try {
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF({
+          orientation: 'p',
+          unit: 'mm',
+          format: [50, 75]
+        });
 
-      for (let i = 0; i < parsedRows.length; i++) {
-        populateRenderElement(parsedRows[i]);
-        const element = document.getElementById('pdf-label-render');
-        const canvas = await html2canvas(element, { scale: 3 });
-        const imgData = canvas.toDataURL('image/png');
+        for (let i = 0; i < parsedRows.length; i++) {
+          const imgData = await captureLabel(parsedRows[i]);
+          if (i > 0) pdf.addPage([50, 75], 'p');
+          pdf.addImage(imgData, 'PNG', 0, 0, 50, 75);
+        }
 
-        if (i > 0) pdf.addPage([50, 75], 'p');
-        pdf.addImage(imgData, 'PNG', 0, 0, 50, 75);
+        pdf.save(`Extracted_Barcode_Labels.pdf`);
+      } finally {
+        btn.innerHTML = origText;
+        btn.disabled = false;
       }
-
-      pdf.save(`Extracted_Barcode_Labels.pdf`);
-
-      btn.innerHTML = origText;
-      btn.disabled = false;
     }
 
     function populateRenderElement(row) {
@@ -593,21 +673,13 @@
       document.getElementById('pdf-product').innerText = row.Product;
       document.getElementById('pdf-mfg').innerText = row.MfgBy;
       document.getElementById('pdf-marketed').innerText = row.Address;
-
-      JsBarcode("#pdf-barcode", row.SKU, {
-        format: "CODE128",
-        width: 1.6,
-        height: 50,
-        displayValue: true,
-        fontSize: 14,
-        margin: 0
-      });
+      renderBarcode("#pdf-barcode", row.SKU);
     }
 
-    function updateStats(total, skus) {
-      document.getElementById('stat-total').innerText = total;
-      document.getElementById('stat-skus').innerText = skus;
-      document.getElementById('btn-download-all').disabled = total === 0;
+    function updateStats(rows) {
+      document.getElementById('stat-total').innerText = rows.length;
+      document.getElementById('stat-skus').innerText = new Set(rows.map(r => r.SKU)).size;
+      document.getElementById('btn-download-all').disabled = rows.length === 0;
     }
 
     function clearAllData() {
@@ -623,25 +695,11 @@
 
       parsedRows.forEach((row, originalIndex) => {
         if (
-          row.SKU.toLowerCase().includes(query) || 
-          row.Brand.toLowerCase().includes(query) || 
+          row.SKU.toLowerCase().includes(query) ||
+          row.Brand.toLowerCase().includes(query) ||
           row.Product.toLowerCase().includes(query)
         ) {
-          const tr = document.createElement('tr');
-          tr.className = "hover:bg-slate-800/80 border-b border-slate-800/60 cursor-pointer";
-          tr.onclick = () => updatePreviewCard(originalIndex);
-          tr.innerHTML = `
-            <td class="p-3.5 font-medium text-white">${escapeHtml(row.Brand)}</td>
-            <td class="p-3.5 text-indigo-300 font-mono font-semibold">${escapeHtml(row.SKU)}</td>
-            <td class="p-3.5">₹${escapeHtml(row.MRP)}</td>
-            <td class="p-3.5">${escapeHtml(row.Size)}</td>
-            <td class="p-3.5 text-right">
-              <button onclick="event.stopPropagation(); downloadSinglePDF(${originalIndex})" class="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-medium border border-indigo-500/30 transition-all inline-flex items-center gap-1">
-                <i class="fa-solid fa-file-pdf"></i> Download PDF
-              </button>
-            </td>
-          `;
-          tbody.appendChild(tr);
+          tbody.appendChild(renderTableRow(row, originalIndex));
         }
       });
     }
