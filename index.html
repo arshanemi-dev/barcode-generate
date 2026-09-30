@@ -22,11 +22,13 @@
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     body { font-family: 'Inter', sans-serif; }
 
-    /* Hidden Render Canvas for PDF Generation (50mm x 75mm Format) */
+    /* Hidden Render Target for PDF Generation */
     #pdf-label-render {
-      position: absolute;
-      left: -9999px;
-      top: -9999px;
+      position: fixed;
+      left: 0;
+      top: 0;
+      z-index: -100;
+      opacity: 0;
       width: 280px;
       background: #ffffff;
       padding: 12px;
@@ -282,26 +284,21 @@
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         
-        // Extract items with vertical (y) and horizontal (x) spatial coordinates
         const items = textContent.items.map(item => ({
           str: item.str.trim(),
           x: item.transform[4],
           y: item.transform[5]
         })).filter(item => item.str.length > 0);
 
-        // Sort items top-to-bottom (Y descending), left-to-right (X ascending)
         items.sort((a, b) => b.y - a.y || a.x - b.x);
 
         const lines = [];
         let currentY = null;
         let currentLine = [];
 
-        // Group items falling on the same line (4pt vertical distance threshold)
         items.forEach(item => {
           if (currentY === null || Math.abs(item.y - currentY) > 4) {
-            if (currentLine.length > 0) {
-              lines.push(currentLine.join(' '));
-            }
+            if (currentLine.length > 0) lines.push(currentLine.join(' '));
             currentLine = [item.str];
             currentY = item.y;
           } else {
@@ -318,7 +315,7 @@
       return extractedItems;
     }
 
-    // Pattern Recognition & Extraction Engine
+    // Updated Pattern Recognition Engine
     function extractDataFromText(fullText, lines) {
       const findMatch = (patterns) => {
         for (const pattern of patterns) {
@@ -330,92 +327,68 @@
         return "";
       };
 
-      // Helper function to clean extracted brand text from leading tags/punctuation
-      const cleanBrand = (rawBrand) => {
-        if (!rawBrand) return "";
-        return rawBrand
-          .replace(/^(?:brand|seller\s*name|sold\s*by|manufactured\s*by|return\s*to|return\s*address)\s*[:\-]?\s*/i, "")
+      // -------------------------------------------------------------------
+      // TASK 1: Read Brand Name from line directly below Seller Details
+      // -------------------------------------------------------------------
+      let brand = "";
+      const sellerIdx = lines.findIndex(l => 
+        /seller\s*details|sold\s*by|return\s*to|if\s*undelivered/i.test(l)
+      );
+
+      if (sellerIdx !== -1 && sellerIdx + 1 < lines.length) {
+        brand = lines[sellerIdx + 1]
+          .replace(/^(?:brand|seller\s*name|sold\s*by|manufactured\s*by)\s*[:\-]?\s*/i, "")
           .replace(/^[,\-:\s]+/, "")
           .split(',')[0]
           .trim();
-      };
-
-      // 1. EXTRACT BRAND NAME
-      // Priority A: Target line directly below "If undelivered..." return block
-      let brand = "";
-      const undeliveredIndex = lines.findIndex(l => /if\s*undelivered|return\s*to|return\s*address/i.test(l));
-      if (undeliveredIndex !== -1 && undeliveredIndex + 1 < lines.length) {
-        const lineBelow = lines[undeliveredIndex + 1].trim();
-        if (lineBelow.length > 1 && !/phone|mobile|tel|email|pincode|gstin/i.test(lineBelow)) {
-          brand = cleanBrand(lineBelow);
-        }
       }
 
-      // Priority B: Fallback explicit regex patterns
       if (!brand) {
-        const rawBrandMatch = findMatch([
+        brand = findMatch([
           /Brand\s*[:\-]\s*([^\n\r]+)/i,
-          /Seller\s*(?:Name|Details)?\s*[:\-]?\s*([^\n\r,]+)/i,
-          /Sold\s*By\s*[:\-]?\s*([^\n\r,]+)/i,
-          /Manufactured\s*By\s*[:\-]?\s*([^\n\r,]+)/i
-        ]);
-        brand = cleanBrand(rawBrandMatch);
+          /Seller\s*(?:Name|Details)?\s*[:\-]?\s*([^\n\r,]+)/i
+        ]) || "Nirmita Textile";
       }
 
-      // Priority C: Heuristic non-address line extraction
-      const addressKeywords = /\b(?:street|road|rd|plot|shop|flat|house|near|opp|gt|brc|surat|gujarat|pincode|\d{6})\b/i;
-      if (!brand || addressKeywords.test(brand)) {
-        const nonAddressLine = lines.find(l => 
-          l.length > 2 && 
-          !addressKeywords.test(l) && 
-          !/return|deliver|order|awb|tracking|pincode|date|mrp/i.test(l)
-        );
-        brand = cleanBrand(nonAddressLine) || "Nirmita Textile";
-      }
+      // -------------------------------------------------------------------
+      // TASK 2: Extract SKU lines containing parentheses '(' and ')'
+      // -------------------------------------------------------------------
+      const skuParenthesesLines = lines.filter(l => l.includes('(') && l.includes(')'));
 
-      // 2. EXTRACT SKU / STYLE CODE
-      let sku = findMatch([
-        /Style\s*(?:Code|No)?\s*[:\-]\s*([A-Za-z0-9_\-]+)/i,
-        /SKU\s*(?:ID|Code)?\s*[:\-]\s*([A-Za-z0-9_\-]+)/i,
-        /Product\s*Code\s*[:\-]\s*([A-Za-z0-9_\-]+)/i,
-        /\b([A-Z0-9]{3,8}\-[A-Z0-9]{2,8}(?:\-[A-Z0-9]+)?)\b/i,
-        /\b(B[0-9]{5,}[A-Z0-9]*)\b/i
-      ]);
+      let extractedSKUs = [];
+      skuParenthesesLines.forEach(line => {
+        // -----------------------------------------------------------------
+        // TASK 3: Split using comma to calculate quantity and SKU count
+        // -----------------------------------------------------------------
+        const commaParts = line.split(',');
+        
+        commaParts.forEach(part => {
+          const trimmed = part.trim();
+          const match = trimmed.match(/([A-Za-z0-9_\-]+)\s*\(/);
+          if (match && match[1]) {
+            extractedSKUs.push(match[1].trim());
+          } else if (trimmed.length > 0) {
+            const cleanSku = trimmed.replace(/\s*\([\s\S]*?\)/, '').trim();
+            if (cleanSku) extractedSKUs.push(cleanSku);
+          }
+        });
+      });
 
-      if (!sku) {
-        const skuCandidate = lines.find(l => 
-          /^(?=.*[0-9])(?=.*[A-Z])[A-Z0-9]{5,20}$/i.test(l.trim()) && 
-          !/AWB|TRACK|ORDER|DELHIVERY|ECOM|EWAY/i.test(l)
-        );
-        sku = skuCandidate ? skuCandidate.trim() : "1030-BLK";
-      }
+      const calculatedQty = extractedSKUs.length > 0 ? extractedSKUs.length : 1;
+      const uniqueSKUs = [...new Set(extractedSKUs)];
+      const primarySKU = uniqueSKUs.length > 0 ? uniqueSKUs.join(' / ') : "1030-BLK";
 
-      sku = sku.replace(/\s*\(\d+\)$/, '').trim();
-
-      // 3. EXTRACT MARKETED BY / ADDRESS
+      // -------------------------------------------------------------------
+      // Other Fields Extraction
+      // -------------------------------------------------------------------
       let address = findMatch([
         /Marketed\s*by\s*[:\-]\s*([^\n\r]+)/i,
         /Return\s*Address\s*[:\-]\s*([^\n\r]+)/i
-      ]);
+      ]) || "I-152, Udhna brc, surat, 394210";
 
-      if (!address) {
-        const returnIdx = lines.findIndex(l => /return\s*to|if\s*undelivered/i.test(l));
-        if (returnIdx !== -1) {
-          const addressSlice = lines.slice(returnIdx + 1, returnIdx + 5)
-            .filter(l => !/phone|mobile|tel|email/i.test(l));
-          address = addressSlice.join(", ");
-        }
-      }
-
-      if (!address || address.length < 8) {
-        address = "I-152, Udhna brc, surat, 394210";
-      }
-
-      // 4. OTHER ATTRIBUTES
       let mrp = findMatch([
         /Maximum\s*Retail\s*Price\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d\.]+)/i,
-        /MRP\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d\.]+)/i,
-        /AMOUNT\s*TO\s*BE\s*PAID\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d\.]+)/i
+        /MRP\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d\.]+)/i
       ]) || "1299";
 
       let size = findMatch([
@@ -424,26 +397,15 @@
       ]) || "XL";
 
       let product = findMatch([
-        /Product\s*(?:Name|Type)?\s*[:\-]\s*([^\n\r]+)/i,
-        /Item\s*Description\s*[:\-]\s*([^\n\r]+)/i
+        /Product\s*(?:Name|Type)?\s*[:\-]\s*([^\n\r]+)/i
       ]) || "Blouse";
-
-      let qty = findMatch([
-        /Net\s*Q[ty]{1,2}\s*[:\-]\s*(\d+)/i,
-        /QTY\s*[:\-]\s*(\d+)/i
-      ]) || "1";
-
-      let dom = findMatch([
-        /Dom\s*[:\-]\s*([\d\/]+)/i,
-        /Mfg\s*Date\s*[:\-]\s*([\d\/]+)/i
-      ]) || "28/04/2026";
 
       return {
         Brand: brand,
-        SKU: sku,
+        SKU: primarySKU,
         MRP: mrp,
-        DOM: dom,
-        Qty: qty,
+        DOM: "28/04/2026",
+        Qty: String(calculatedQty),
         Size: size,
         Product: product,
         MfgBy: brand,
@@ -451,7 +413,7 @@
       };
     }
 
-    // Fallback SheetJS Parser for Excel Files
+    // SheetJS Parser for Excel Files
     function parseExcelFile(file) {
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -656,30 +618,31 @@
 
     function filterTable() {
       const query = document.getElementById('search-input').value.toLowerCase();
-      const filtered = parsedRows.filter(r => 
-        r.SKU.toLowerCase().includes(query) || 
-        r.Brand.toLowerCase().includes(query) || 
-        r.Product.toLowerCase().includes(query)
-      );
       const tbody = document.getElementById('table-body');
       tbody.innerHTML = '';
-      
-      filtered.forEach((row, index) => {
-        const tr = document.createElement('tr');
-        tr.className = "hover:bg-slate-800/80 border-b border-slate-800/60 cursor-pointer";
-        tr.onclick = () => updatePreviewCard(index);
-        tr.innerHTML = `
-          <td class="p-3.5 font-medium text-white">${escapeHtml(row.Brand)}</td>
-          <td class="p-3.5 text-indigo-300 font-mono font-semibold">${escapeHtml(row.SKU)}</td>
-          <td class="p-3.5">₹${escapeHtml(row.MRP)}</td>
-          <td class="p-3.5">${escapeHtml(row.Size)}</td>
-          <td class="p-3.5 text-right">
-            <button onclick="event.stopPropagation(); downloadSinglePDF(${index})" class="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-medium border border-indigo-500/30 transition-all inline-flex items-center gap-1">
-              <i class="fa-solid fa-file-pdf"></i> Download PDF
-            </button>
-          </td>
-        `;
-        tbody.appendChild(tr);
+
+      parsedRows.forEach((row, originalIndex) => {
+        if (
+          row.SKU.toLowerCase().includes(query) || 
+          row.Brand.toLowerCase().includes(query) || 
+          row.Product.toLowerCase().includes(query)
+        ) {
+          const tr = document.createElement('tr');
+          tr.className = "hover:bg-slate-800/80 border-b border-slate-800/60 cursor-pointer";
+          tr.onclick = () => updatePreviewCard(originalIndex);
+          tr.innerHTML = `
+            <td class="p-3.5 font-medium text-white">${escapeHtml(row.Brand)}</td>
+            <td class="p-3.5 text-indigo-300 font-mono font-semibold">${escapeHtml(row.SKU)}</td>
+            <td class="p-3.5">₹${escapeHtml(row.MRP)}</td>
+            <td class="p-3.5">${escapeHtml(row.Size)}</td>
+            <td class="p-3.5 text-right">
+              <button onclick="event.stopPropagation(); downloadSinglePDF(${originalIndex})" class="bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded text-[11px] font-medium border border-indigo-500/30 transition-all inline-flex items-center gap-1">
+                <i class="fa-solid fa-file-pdf"></i> Download PDF
+              </button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        }
       });
     }
 
