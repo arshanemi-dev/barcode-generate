@@ -429,28 +429,64 @@
     }
 
     // -------------------------------------------------------------------
-    // STEP 3 + 4: A line with "( )" holds SKUs written as SKU(qty), e.g.
-    // "B165804-38RNI(1), B171504-38RNI(1)". Split on commas: the number of parts is
-    // the quantity, and repeated SKUs collapse into one label. Parts that aren't
-    // SKU(number) — like the routing code "(201014)-(0310)" — are ignored.
+    // STEP 3 + 4: Labels print SKUs in one of two ways:
+    //  - SKU(qty), e.g. "B165804-38RNI(1), B171504-38RNI(1)". Split on commas;
+    //    parts that aren't SKU(number) — like the routing code "(201014)-(0310)" — are ignored.
+    //  - [SKU], e.g. "[KF01INC- Black-4-5 Y]". The SKU may contain spaces, and a
+    //    long one can wrap onto the line below.
+    // Each SKU found counts as one unit, so the number found is the quantity and
+    // repeated SKUs collapse into one label.
     // -------------------------------------------------------------------
     const SKU_PART = /^([^\s()]+)\s*\(\s*\d+\s*\)$/;
+    const BRACKET_SKU = /\[([^\[\]]+)\]/g;
 
     function extractSkuCounts(lines) {
       const counts = new Map();
-      const skuLines = lines.filter(line => {
-        if (!/\(.*\)/.test(line.text)) return false;
+      const skuLines = [];
+      const addSku = (sku) => counts.set(sku, (counts.get(sku) || 0) + 1);
+
+      lines.forEach(line => {
+        if (skuLines.includes(line)) return; // already read as the wrapped end of a [SKU]
+
+        if (line.text.includes('[')) {
+          const group = [line];
+          let text = line.text;
+          // A "[" left open means the SKU carries on in the line below
+          while (text.lastIndexOf('[') > text.lastIndexOf(']') && group.length < 3) {
+            const next = findLineBelow(lines, group[group.length - 1]);
+            if (!next || group.includes(next)) break;
+            group.push(next);
+            text += ' ' + next.text;
+          }
+          const skus = [...text.matchAll(BRACKET_SKU)].map(m => m[1].replace(/\s+/g, ' ').trim()).filter(Boolean);
+          if (skus.length) {
+            skus.forEach(addSku);
+            skuLines.push(...group);
+            return;
+          }
+        }
+
+        if (!/\(.*\)/.test(line.text)) return;
         let found = false;
         line.text.split(',').forEach(part => {
           const match = part.trim().match(SKU_PART);
           if (match) {
-            counts.set(match[1], (counts.get(match[1]) || 0) + 1);
+            addSku(match[1]);
             found = true;
           }
         });
-        return found;
+        if (found) skuLines.push(line);
       });
       return { counts, skuLines };
+    }
+
+    // Size written at the end of the SKU: "KF01INC- Black-4-5 Y" -> "4-5 Y",
+    // "STAR-5 years" -> "5 years", "1030-BLK-XL" -> "XL"
+    const SKU_SIZE = /(?:^|[\s_-])(\d+(?:\s*-\s*\d+)?\s*(?:y|yrs?|years?|m|months?)|\d*x*[sl]|m|free)$/i;
+
+    function sizeFromSku(sku) {
+      const match = sku.match(SKU_SIZE);
+      return match ? match[1] : "";
     }
 
     function extractLabelsFromPage(lines) {
@@ -496,10 +532,11 @@
         /MRP\s*[:\-]?\s*(?:Rs\.?|₹)?\s*([\d\.]+)/i
       ]) || "1299";
 
+      // No size field on the page -> take it from each SKU, then fall back to XL
       let size = findMatch([
         /Size\s*[:\-]\s*([A-Za-z0-9]+)/i,
         /\b(Size|SZ)\s*[:\-]?\s*(S|M|L|XL|XXL|3XL|4XL|FREE|\d{2})\b/i
-      ]) || "XL";
+      ]);
 
       let product = findMatch([
         /Product\s*(?:Name|Type)?\s*[:\-]\s*([^\n\r]+)/i
@@ -520,7 +557,7 @@
         DOM: "28/04/2026",
         Qty: String(qty),
         NetQty: "1",
-        Size: size,
+        Size: size || sizeFromSku(sku) || "XL",
         Product: product,
         MfgBy: brand,
         Address: address,
